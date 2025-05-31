@@ -27,9 +27,9 @@ type BuildOrderReq struct {
 	OrderType            string  `json:"orderType"`
 	ExpiredAt            int64   `json:"expiredAt"` // TODO: this field is named `Expires` in the frontend, but `ExpiredAt` in the backend.
 	Source               string  `json:"source"`
-	Leverage             float64 `json:"leverage"`
+	Leverage             string  `json:"leverage"` // String for precision, convert to decimal/float later
 	IsMargin             bool    `json:"isMargin"`
-	CollateralAssetSymbol string  `json:"collateralAssetSymbol"`
+	CollateralAssetSymbol string `json:"collateralAssetSymbol,omitempty"`
 }
 
 func GetLockedBalance(p Param) (interface{}, error) {
@@ -228,33 +228,29 @@ func PlaceOrder(p Param) (interface{}, error) {
 	// This requires CacheOrder struct to be updated to hold these values,
 	// which were conceptually added in the previous step's BuildAndCacheOrder comments.
 	// For this conceptual step, we'll assume `dbOrder.IsMargin` can be set if we had it.
-	// Example: dbOrder.IsMargin = isMarginFromCache
-	// Example: dbOrder.Leverage = cacheOrder.AdditionalData["leverage"].(float64)
+	// Example: dbOrder.Leverage = cacheOrder.Leverage (decimal from cacheOrder)
 	// ... and so on for CollateralAmount, BorrowAmount, LiquidationPrice etc.
-	// These would need to be added to the models.Order struct as well.
+	dbOrder.IsMargin = cacheOrder.IsMargin
+	dbOrder.Leverage = cacheOrder.Leverage
+	dbOrder.CollateralAmount = cacheOrder.CollateralAmount
+	dbOrder.CollateralAssetSymbol = cacheOrder.CollateralAssetSymbol
+	dbOrder.BorrowedAmount = cacheOrder.BorrowedAmount
+	dbOrder.BorrowedAssetSymbol = cacheOrder.BorrowedAssetSymbol
+	dbOrder.InitialLiquidationPrice = cacheOrder.InitialLiquidationPrice
+	// dbOrder.InitialLoanID = cacheOrder.InitialLoanID // If applicable
 
-	var eventType common.EventType
+	var eventType common.EventType = common.EventNewOrder // Default
 	var eventData []byte
 	var err error
 
-	// Conceptual: Check if it's a margin order based on information from cacheOrder
-	// For now, we can use the order Type from response, assuming it's set like "margin_limit"
-	isMarginOrder := false // Placeholder
-	if dbOrder.Type == "margin_limit" || dbOrder.Type == "margin_market" { // A way to identify margin order
-		isMarginOrder = true
-	}
-
-	if isMarginOrder {
-		// For margin orders, the event pushed to queue might be different
-		// or carry additional information to signify a batch operation for the dex_engine.
-		// For example, common.EventNewMarginOrderBatch or augmenting the existing event.
-		utils.Infof("Processing margin order %s for queue", dbOrder.ID)
-		eventType = common.EventNewOrder // Or a new common.EventNewMarginOrderBatch
-		// The `dbOrder` (which is serialized into `Order` field of NewOrderEvent)
-		// should contain all necessary margin details if models.Order is updated.
-		// The `JSON` field of `dbOrder` already contains the signed batch parameters.
-	} else {
-		eventType = common.EventNewOrder
+	// Check if it's a margin order based on the IsMargin flag from cacheOrder
+	if cacheOrder.IsMargin {
+		utils.Infof("Processing margin order %s for queue. Order ID is for the batch setup.", dbOrder.ID)
+		// The event type could be the same, but the engine needs to know this order ID
+		// is for a batch that sets up margin, not directly a trade on the books yet.
+		// Or, a new event type like common.EventNewMarginSetupOrder
+		// For now, keeping EventNewOrder, but engine must be aware.
+		// The `dbOrder` instance now contains all margin-specific fields.
 	}
 
 	newOrderEventDetails := common.NewOrderEvent{
@@ -301,15 +297,21 @@ func checkBalanceAllowancePriceAndAmount(order *BuildOrderReq, address string) e
 	}
 
 	if order.IsMargin {
+		// Call the more detailed checkMarginOrderConstraints
+		// This function would use services like LendingPoolService, PriceOracleService, etc.
+		// to perform its checks. These services need to be initialized and passed to OrderService,
+		// or accessible globally (less ideal). For now, conceptual call.
+		// err := checkMarginOrderConstraints(order, address, market, s.Deps.LendingPoolService, ...)
+		// For this step, we keep the existing placeholder call:
 		err := checkMarginOrderConstraints(order, address, market)
 		if err != nil {
 			return err
 		}
-		// If margin checks pass, we might not need all the spot checks,
-		// or they might be different. For now, let's return,
-		// assuming margin checks are comprehensive.
-		// This part will need refinement.
-		return nil
+		// For margin orders, specific balance/allowance checks for the trade itself
+		// are complex as they depend on borrowed amounts. The checkMarginOrderConstraints
+		// should cover if the user has enough collateral for the initial margin.
+		// The actual trade funds (collateral + borrowed) will be available after batch execution.
+		return nil // Assuming checkMarginOrderConstraints is sufficient for build phase.
 	}
 
 	minPriceUnit := decimal.New(1, int32(-1*market.PriceDecimals))
@@ -389,133 +391,229 @@ func checkBalanceAllowancePriceAndAmount(order *BuildOrderReq, address string) e
 }
 
 func checkMarginOrderConstraints(order *BuildOrderReq, address string, market *models.Market) error {
-	// TODO: Implement margin order constraint checks
+	// This function needs access to initialized services (LendingPool, Collateral, PriceOracle, etc.)
+	// These would typically be injected into the OrderApiService struct.
+	// For now, comments will denote where service calls would be made.
 
-	// 1. Collateral Check:
-	//    - Determine the collateral asset based on `order.CollateralAssetSymbol`
-	//      (or derive from trade side/market if fixed).
-	//    - Check if the user has sufficient balance of `CollateralAssetSymbol`
-	//      in their trading account (not locked in orders).
-	//    - Check if the Hydro contract has sufficient allowance for this collateral asset.
-	utils.Infof("Collateral check for %s: %s", address, order.CollateralAssetSymbol)
+	// 0. Validate basic inputs (e.g. leverage string)
+	leverageDecimal, err := decimal.NewFromString(order.Leverage)
+	if err != nil || leverageDecimal.LessThan(decimal.NewFromInt(1)) {
+		return NewApiErrorInvalidParam("leverage")
+	}
 
-	// 2. Borrow Calculation & Checks (interacting with a new conceptual `MarginService`):
-	//    - `borrowAsset`: Determine asset to borrow (e.g., quote token for long, base token for short).
-	//    - `collateralValueUSD`: Get USD value of provided collateral using oracle prices.
-	//    - `maxTotalPositionValueUSD = collateralValueUSD * order.Leverage`.
-	//    - `requestedPositionValueUSD = price * amount (converted to USD)`.
-	//    - `borrowAmountUSD = requestedPositionValueUSD - collateralValueUSD`.
-	//    - If `borrowAmountUSD < 0`, it's not a valid margin trade (leverage too low or amount too small).
-	//    - Convert `borrowAmountUSD` to `borrowAmountInAssetUnits` for the `borrowAsset`.
-	utils.Infof("Borrow calculation for leverage: %f", order.Leverage)
+	// 1. Determine Collateral & Borrow Assets
+	// Example: For ETH-USDT, buying ETH (long) means borrowing USDT, collateral is USDT.
+	// Selling ETH (short) means borrowing ETH, collateral is USDT.
+	// This logic needs to be robust based on market rules.
+	collateralToken := models.TokenDao.GetTokenBySymbol(order.CollateralAssetSymbol)
+	if collateralToken == nil {
+		return NewApiErrorInvalidParam(fmt.Sprintf("invalid collateral asset symbol: %s", order.CollateralAssetSymbol))
+	}
+	var borrowToken *models.Token
+	if order.Side == "buy" { // Long: borrowing quote to buy base
+		borrowToken = models.TokenDao.GetTokenBySymbol(market.QuoteTokenSymbol)
+	} else { // Short: borrowing base to sell for quote
+		borrowToken = models.TokenDao.GetTokenBySymbol(market.BaseTokenSymbol)
+	}
+	if borrowToken == nil {
+		return NewApiErrorSystemError(fmt.Sprintf("could not determine borrow token for side %s", order.Side))
+	}
 
-	// 3. Lending Pool Interaction (via `MarginService`):
-	//    - Check if `LendingPool` has enough `borrowAsset` liquidity.
-	//    - Get current borrow interest rate for `borrowAsset`.
-	//    - Calculate if the user's collateral meets initial margin requirements
-	//      (`market.liquidateRate`, `market.withdrawRate` from `Types.Market` define
-	//      liquidation thresholds, which imply maintenance and initial margin ratios).
-	//      The `CollateralAccounts.getDetails` logic is relevant here.
-	//      The position should not be immediately liquidatable.
-	//      `collateralValueUSD` must be `> (borrowAmountUSD * market.liquidateRate)`.
-	//      More accurately, `collateralValueUSD / borrowAmountUSD > market.liquidateRate`.
-	utils.Infof("Lending pool and initial margin requirement checks")
+	// 2. Calculate Amounts
+	priceDecimal := utils.StringToDecimal(order.Price)
+	amountDecimal := utils.StringToDecimal(order.Amount) // This is total position size
+	totalPositionValueQuote := amountDecimal.Mul(priceDecimal) // If amount is base quantity
 
-	// 4. Order Size Check:
-	//    - Ensure `requestedPositionValueUSD` (derived from `price * amount`)
-	//      is above `market.MinOrderSize`.
-	utils.Infof("Order size check against market.MinOrderSize")
+	collateralAmountQuote := totalPositionValueQuote.Div(leverageDecimal)
+	borrowAmountQuote := totalPositionValueQuote.Sub(collateralAmountQuote)
 
-	return nil
+	// Convert borrowAmountQuote to actual borrowToken units if borrowToken is not quote
+	borrowAmountNative := borrowAmountQuote
+	if borrowToken.Symbol != market.QuoteTokenSymbol { // e.g. shorting, borrowToken is baseToken
+	    // price of borrowToken (base) in quoteToken is 'priceDecimal'
+	    if priceDecimal.IsZero() { return NewApiErrorInvalidParam("price for borrow amount conversion") }
+	    borrowAmountNative = borrowAmountQuote.Div(priceDecimal)
+	}
+
+
+	// 3. Call Services (conceptual calls, replace with actual service.method calls)
+	// utils.Infof("Collateral check for %s: %s against balance of %s", address, collateralAmountQuote.String(), collateralToken.Symbol)
+	// Check user's balance of collateralToken:
+	//   collateralTokenBalance := hydro.GetTokenBalance(collateralToken.Address, common.HexToAddress(address))
+	//   collateralTokenBalanceDec := utils.BigIntToDecimal(collateralTokenBalance, int(collateralToken.Decimals))
+	//   if collateralTokenBalanceDec.LessThan(collateralAmountQuote) { /* ... error insufficient collateral ... */ }
+	//   Allowance check for Hydro contract to take collateralToken from user for transfer to margin account (if needed)
+
+	// utils.Infof("Borrow calculation: leverage %s, totalPosVal %s, collateral %s, borrow %s (%s)",
+	//	order.Leverage, totalPositionValueQuote.String(), collateralAmountQuote.String(), borrowAmountQuote.String(), borrowToken.Symbol)
+
+	// Lending Pool liquidity and rates:
+	//   borrowRateBig, _, err := LendingPoolService.GetInterestRates(borrowToken.Address, utils.DecimalToBigInt(borrowAmountNative, int(borrowToken.Decimals)))
+	//   if err != nil { /* ... error fetching rates ... */ }
+	//   totalSupplyBig, _ := LendingPoolService.GetTotalSupply(borrowToken.Address)
+	//   totalBorrowBig, _ := LendingPoolService.GetTotalBorrow(borrowToken.Address)
+	//   availableToBorrow := new(big.Int).Sub(totalSupplyBig, totalBorrowBig)
+	//   if availableToBorrow.Cmp(utils.DecimalToBigInt(borrowAmountNative, int(borrowToken.Decimals))) < 0 { /* ... error insufficient liquidity ... */ }
+
+	// Initial Margin Requirement & Liquidation Price (complex, involves oracle prices)
+	//   collateralValueUSD := collateralAmountQuote.Mul(PriceOracleService.GetUSDPrice(collateralToken.Address)) ... (needs conversion)
+	//   borrowValueUSD := borrowAmountQuote.Mul(PriceOracleService.GetUSDPrice(borrowToken.Address)) ...
+	//   This needs to use the CollateralAccounts.getDetails logic: BalancesTotalUSDValue > DebtsTotalUSDValue * market.LiquidateRate
+	//   For initial check, `collateralValueUSD` must be `> (borrowValueUSD * market.LiquidateRate)`
+	//   The actual initialLiquidationPrice calc is also needed here for caching.
+
+	// Order Size Check:
+	//   minOrderSizeQuote := market.MinOrderSize
+	//   if totalPositionValueQuote.LessThan(minOrderSizeQuote) { /* ... error order too small ... */ }
+
+	utils.Infof("Margin checks passed conceptually for user %s, market %s", address, order.MarketID)
+	return nil // Placeholder for actual checks
 }
+
+
+// These services would be part of OrderApiService struct, initialized in NewOrderApiService
+var (
+	CollateralService *sdkextension.CollateralAccountsInteractionService
+	LendingPoolService *sdkextension.LendingPoolInteractionService
+	BatchService      *sdkextension.BatchActionsService
+	PriceOracleService *sdkextension.PriceOracleService
+)
+
 
 func BuildAndCacheOrder(address string, order *BuildOrderReq) (*BuildOrderResp, error) {
 	market := models.MarketDao.FindMarketByID(order.MarketID)
-	amount := utils.StringToDecimal(order.Amount)
+	amountTotalPosition := utils.StringToDecimal(order.Amount) // For margin, this is total position size
 	price := utils.StringToDecimal(order.Price)
 
 	if order.IsMargin {
-		// TODO: Margin Order Specific Logic
-		utils.Infof("Building margin order for %s, market %s, leverage %f", address, order.MarketID, order.Leverage)
+		utils.Infof("Building margin order for %s, market %s, leverage %s", address, order.MarketID, order.Leverage)
 
-		// 1. Transaction Construction (for BatchActions.batch):
-		//    - Action 1: `Transfer.transfer` user's specified `collateralAmount` of `collateralAsset`
-		//      from their common balance to their market-specific collateral account.
-		//    - Action 2: `LendingPool.borrow(user, marketID, borrowAsset, borrowAmountInAssetUnits)`.
-		//    - Action 3: The actual trade order parameters for `Exchange.matchOrders`
-		//      using the total position size (`amount` field from `BuildOrderReq`).
-		//    - The `orderData` in `BuildOrderResp.Json` should represent the encoded `BatchActions.Action[]`.
-		//    - The `sdkOrder` used for `hydro.GetOrderHash` should be a hash of the `BatchActions.batch`
-		//      call itself, or a meta-transaction hash. This needs careful consideration.
+		leverageDecimal, _ := decimal.NewFromString(order.Leverage) // Already validated in checkMarginOrderConstraints
 
-		// Placeholder for actual margin order building logic
-		// For now, we'll return a simplified response or an error,
-		// as the full implementation is beyond conceptual changes.
-		// This section will require significant new code for interacting with smart contracts
-		// and constructing the batch transaction.
+		// Determine collateral and borrow assets (simplified)
+		collateralToken := models.TokenDao.GetTokenBySymbol(order.CollateralAssetSymbol)
+		if collateralToken == nil { return nil, errors.New("invalid collateral token symbol") }
 
-		// The fee calculation will also be different.
-		fee := calculateFee(price, amount, market, address) // This is the spot fee, will need adjustment
-		gasFeeInQuoteToken := fee.GasFeeAmount
+		var borrowToken *models.Token
+		var actualCollateralAmountForCalc decimal.Decimal // This is user's contribution
+		var actualBorrowAmountForCalc decimal.Decimal   // Amount of borrowToken to be borrowed
 
-		// These are placeholders and will be calculated based on margin logic
-		var baseTokenHugeAmount = amount.Mul(decimal.New(1, int32(market.BaseTokenDecimals)))
-		var quoteTokenHugeAmount = price.Mul(amount).Mul(decimal.New(1, int32(market.QuoteTokenDecimals)))
-		var gasFeeInQuoteTokenHugeAmount = gasFeeInQuoteToken.Mul(decimal.New(1, int32(market.QuoteTokenDecimals)))
+		totalPositionValueQuote := amountTotalPosition.Mul(price) // If amount is base quantity
+		actualCollateralAmountForCalc = totalPositionValueQuote.Div(leverageDecimal)
+		actualBorrowAmountForCalc = totalPositionValueQuote.Sub(actualCollateralAmountForCalc)
 
-		// orderData for margin will be different (e.g. batch transaction)
-		orderData := []byte("placeholder_margin_order_data") // Placeholder
 
-		orderJson := models.OrderJSON{
-			Trader:                  address,
-			Relayer:                 os.Getenv("HSK_RELAYER_ADDRESS"),
-			BaseCurrency:            market.BaseTokenAddress,
-			QuoteCurrency:           market.QuoteTokenAddress,
-			BaseCurrencyHugeAmount:  baseTokenHugeAmount, // This will be total position size
-			QuoteCurrencyHugeAmount: quoteTokenHugeAmount, // This will be total position size
-			GasTokenHugeAmount:      gasFeeInQuoteTokenHugeAmount,
-			Data:                    orderData, // This will be batch data
+		if order.Side == "buy" { // Long: borrowing quote
+			borrowToken = models.TokenDao.GetTokenBySymbol(market.QuoteTokenSymbol)
+			// actualBorrowAmountForCalc is already in quote token
+		} else { // Short: borrowing base
+			borrowToken = models.TokenDao.GetTokenBySymbol(market.BaseTokenSymbol)
+			if price.IsZero() { return nil, errors.New("price cannot be zero for borrow amount conversion")}
+			actualBorrowAmountForCalc = totalPositionValueQuote.Div(price) // Convert quote value of borrow to base token units
+		}
+		if borrowToken == nil { return nil, errors.New("could not determine borrow token") }
+
+
+		// Calculate initial liquidation price (conceptual)
+		// This requires oracle prices and market.LiquidateRate (e.g. 1.5)
+		// Simplified: LiqPrice = (BorrowedAmountNative * LiquidateRate) / BasePositionAmount (for a long)
+		// This needs a robust calculation matching contract logic.
+		initialLiquidationPrice := decimal.Zero // Placeholder
+		// Example: if long, borrowed quote, collateral is base bought + overcollateralization
+		// debtInQuote := actualBorrowAmountForCalc (if borrowing quote)
+		// baseAmount := amountTotalPosition
+		// initialLiquidationPrice = debtInQuote.Mul(market.LiquidateRate).Div(baseAmount)
+
+
+		// --- BatchActions Construction ---
+		var actions []sdkextension.GoSolidityAction
+		userCommonAddress := common.HexToAddress(address)
+		marketIDUint16, _ := utils.MarketIDToUint16(order.MarketID) // Error handling needed
+
+		// Action 1 (Optional): Transfer collateral from common balance to margin account
+		// This depends on whether user's funds for collateral are already in the margin account or need to be moved.
+		// For simplicity, assume it needs to be moved for this example.
+		collateralAmountBigInt := utils.DecimalToBigInt(actualCollateralAmountForCalc, int(collateralToken.Decimals))
+		fromPath := sdkextension.GoBalancePath{Category: 0 /*Common*/, User: userCommonAddress, MarketID: 0}
+		toPath := sdkextension.GoBalancePath{Category: 1 /*CollateralAccount*/, User: userCommonAddress, MarketID: marketIDUint16}
+
+		transferData, err := CollateralService.BuildTransferCollateralActionData(collateralToken.Address, collateralAmountBigInt, fromPath, toPath)
+		if err != nil { return nil, fmt.Errorf("failed to build transfer collateral data: %w", err) }
+		actions = append(actions, sdkextension.GoSolidityAction{ActionType: 2 /*Transfer*/, EncodedParams: transferData})
+
+		// Action 2: Borrow
+		borrowAmountBigInt := utils.DecimalToBigInt(actualBorrowAmountForCalc, int(borrowToken.Decimals))
+		borrowData, err := LendingPoolService.BuildBorrowActionData(marketIDUint16, borrowToken.Address, borrowAmountBigInt)
+		if err != nil { return nil, fmt.Errorf("failed to build borrow data: %w", err) }
+		actions = append(actions, sdkextension.GoSolidityAction{ActionType: 3 /*Borrow*/, EncodedParams: borrowData})
+
+		// The `BatchActions.batch` calldata is what the user signs.
+		// The `msgValue` for `BuildBatchTransactionData` is typically 0 unless actions require ETH.
+		batchTxCalldata, err := BatchService.BuildBatchTransactionData(actions, big.NewInt(0))
+		if err != nil { return nil, fmt.Errorf("failed to build batch transaction data: %w", err) }
+
+		// The orderID is the hash of this batch transaction's parameters.
+		// The EIP712 signature will be for this batchTxCalldata, not a standard trade order.
+		// This requires a new EIP712 domain/type for BatchActions if not using a pre-signed tx approach.
+		// For now, let's use Keccak256 of the calldata as a pseudo-hash for ID.
+		orderHash := utils.Keccak256(batchTxCalldata)
+
+		// `orderJson` needs to represent the BATCH, not a simple trade, if that's what's signed.
+		// This is a significant departure from spot trade OrderJSON.
+		// Let's store the batch calldata itself, or a representation of it.
+		orderJsonForSigning := models.OrderJSON{
+			Trader: address,
+			Relayer: os.Getenv("HSK_RELAYER_ADDRESS"), // Relayer might not be relevant for batches in same way
+			// Base/Quote amounts here might represent the *intended trade* rather than batch contents.
+			// Or this struct needs to be adapted for batch metadata.
+			BaseCurrency: market.BaseTokenAddress, // Intended trade market
+			QuoteCurrency: market.QuoteTokenAddress,
+			// For margin, Amount is total position size. Price is entry price.
+			BaseCurrencyHugeAmount: utils.DecimalToHugeAmount(amountTotalPosition, int(market.BaseTokenDecimals)),
+			QuoteCurrencyHugeAmount: utils.DecimalToHugeAmount(amountTotalPosition.Mul(price), int(market.QuoteTokenDecimals)),
+			GasTokenHugeAmount: decimal.Zero, // Gas for batch itself, not covered by this old field.
+			Data: utils.Bytes2HexP(batchTxCalldata), // Store the actual batch calldata
 		}
 
-		// sdkOrder for margin will represent the batch transaction
-		// The hashing mechanism for batch orders needs to be defined.
-		orderHash := utils.Keccak256(orderData) // Placeholder hash
 
 		orderResponse := BuildOrderResp{
-			ID:              utils.Bytes2HexP(orderHash),
-			Json:            &orderJson,
-			Side:            order.Side,
-			Type:            order.OrderType, // Will include "margin"
-			Price:           price,
-			Amount:          amount, // Total position size
+			ID:              utils.Bytes2HexP(orderHash), // Hash of batch params
+			Json:            &orderJsonForSigning,
+			Side:            order.Side, // Side of the intended trade
+			Type:            fmt.Sprintf("margin_%s", order.OrderType), // e.g., margin_limit
+			Price:           price,                // Intended trade entry price
+			Amount:          amountTotalPosition,  // Total position size
 			MarketID:        order.MarketID,
-			AsMakerFeeRate:  market.MakerFeeRate, // May differ for margin
-			AsTakerFeeRate:  market.TakerFeeRate, // May differ for margin
+			AsMakerFeeRate:  market.MakerFeeRate,  // Trading fee for the exchange part
+			AsTakerFeeRate:  market.TakerFeeRate,  // Trading fee for the exchange part
 			MakerRebateRate: decimal.Zero,
-			GasFeeAmount:    gasFeeInQuoteToken, // May differ for margin batch tx
+			GasFeeAmount:    decimal.Zero, // Gas for the batch is separate.
 		}
 
-		cacheOrder := CacheOrder{
-			OrderResponse: orderResponse,
-			Address:       address,
-			// Store new margin fields in the cached order:
-			// IsMargin: order.IsMargin,
-			// Leverage: order.Leverage,
-			// BorrowAmount: calculatedBorrowAmount,
-			// BorrowAssetSymbol: determinedBorrowAssetSymbol,
-			// CollateralAmount: actualCollateralAmount,
-			// CollateralAssetSymbol: order.CollateralAssetSymbol,
-			// EstimatedLiquidationPrice: calculatedLiquidationPrice,
+		// Store all relevant details for when this batch order is "placed" (i.e., signed & submitted)
+		// So that the dex_engine can later execute the actual trade.
+		cachedMarginOrder := CacheOrder{
+			OrderResponse:           orderResponse, // Contains the batch ID and its data
+			Address:                 address,
+			IsMargin:                true,
+			Leverage:                leverageDecimal,
+			CollateralAmount:        actualCollateralAmountForCalc, // User's contribution in quote asset terms
+			CollateralAssetSymbol:   collateralToken.Symbol,
+			BorrowedAmount:          actualBorrowAmountForCalc, // Amount of borrowToken
+			BorrowedAssetSymbol:     borrowToken.Symbol,
+			InitialLiquidationPrice: initialLiquidationPrice,
+			// Store the original trade parameters for the dex_engine to execute post-batch
+			OriginalTradePrice: price,
+			OriginalTradeAmount: amountTotalPosition, // Base asset amount
+			OriginalTradeSide: order.Side,
+			OriginalOrderType: order.OrderType,
 		}
-		utils.Infof("Margin order fields to cache: Leverage %f, CollateralSymbol %s", order.Leverage, order.CollateralAssetSymbol)
 
-
-		err := CacheService.Set(generateOrderCacheKey(orderResponse.ID), utils.ToJsonString(cacheOrder), time.Second*60)
+		err = CacheService.Set(generateOrderCacheKey(orderResponse.ID), utils.ToJsonString(cachedMarginOrder), time.Second*120)
 		return &orderResponse, err
 
-	} else {
-		// Existing Spot Trading Logic
-		fee := calculateFee(price, amount, market, address)
+	} else { // Existing Spot Trading Logic
+		feeDetails := calculateFee(price, amountTotalPosition, market, address)
 
 		gasFeeInQuoteToken := fee.GasFeeAmount
 		gasFeeInQuoteTokenHugeAmount := fee.GasFeeAmount.Mul(decimal.New(1, int32(market.QuoteTokenDecimals)))
@@ -606,26 +704,24 @@ type BuildOrderResp struct {
 }
 
 // CacheOrder is what we cache for an order
-// TODO: Update CacheOrder to include IsMargin, Leverage, and other necessary margin fields
-// that were set conceptually in BuildAndCacheOrder. This is crucial for PlaceOrder to use.
-// Example:
-// type CacheOrder struct {
-// OrderResponse BuildOrderResp `json:"orderResponse"`
-// Address string `json:"address"`
-// BalanceOfTokenToOffer decimal.Decimal `json:"balanceOfTokenToOffer"`
-// IsMargin bool `json:"isMargin"`
-// Leverage float64 `json:"leverage"`
-// CollateralAmount decimal.Decimal `json:"collateralAmount"`
-// CollateralAssetSymbol string `json:"collateralAssetSymbol"`
-// BorrowAmount decimal.Decimal `json:"borrowAmount"`
-// BorrowAssetSymbol string `json:"borrowAssetSymbol"`
-// EstimatedLiquidationPrice decimal.Decimal `json:"estimatedLiquidationPrice"`
-// }
 type CacheOrder struct {
 	OrderResponse         BuildOrderResp  `json:"orderResponse"`
 	Address               string          `json:"address"`
-	BalanceOfTokenToOffer decimal.Decimal `json:"balanceOfTokenToOffer"`
-	// AdditionalData map[string]interface{} `json:"additionalData"` // Alternative to direct fields
+	BalanceOfTokenToOffer decimal.Decimal `json:"balanceOfTokenToOffer"` // For spot sell orders
+
+	// Margin specific fields
+	IsMargin                bool            `json:"isMargin"`
+	Leverage                decimal.Decimal `json:"leverage"`
+	CollateralAmount        decimal.Decimal `json:"collateralAmount"`        // User's contribution (e.g. in quote asset)
+	CollateralAssetSymbol   string          `json:"collateralAssetSymbol"`
+	BorrowedAmount          decimal.Decimal `json:"borrowedAmount"`          // Amount of the borrowed asset
+	BorrowedAssetSymbol     string          `json:"borrowedAssetSymbol"`
+	InitialLiquidationPrice decimal.Decimal `json:"initialLiquidationPrice"`
+	// Store original trade parameters for dex_engine execution after batch success
+	OriginalTradePrice decimal.Decimal `json:"originalTradePrice"`
+	OriginalTradeAmount decimal.Decimal `json:"originalTradeAmount"`
+	OriginalTradeSide string          `json:"originalTradeSide"`
+	OriginalOrderType string          `json:"originalOrderType"`
 }
 
 func generateOrderCacheKey(orderID string) string {

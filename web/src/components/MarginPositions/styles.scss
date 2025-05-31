@@ -1,0 +1,130 @@
+// web/src/components/MarginPositions/styles.scss
+.margin-positions-tab {
+  font-size: 0.875rem;
+  height: 100%; // Ensure it fills available space if needed
+
+  .table-responsive {
+    max-height: 100%; // Or specific height if parent has one
+    overflow-y: auto;
+    min-height: 150px; // Ensure it has some height even if empty for scrollbar to attach
+  }
+
+  .table {
+    td, th {
+      padding: 0.5rem;
+      vertical-align: middle;
+      white-space: nowrap; // Prevent text wrapping that breaks layout
+    }
+    button {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+    }
+  }
+  .loading-positions, .no-positions {
+    padding: 1rem;
+    text-align: center;
+    color: #6c757d; // text-secondary
+    min-height: 100px; // Ensure it's visible
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+// Basic modal styling (can be enhanced or use a global modal style from the application)
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1050; // Ensure it's above other content
+
+  .modal-dialog {
+    width: 100%;
+    max-width: 500px; // Adjust as needed
+    margin: 1.75rem auto;
+    pointer-events: none; // Let clicks pass through overlay unless on modal-content
+  }
+
+  .modal-content {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    pointer-events: auto; // Enable clicks on the modal content
+    background-color: #fff; // Or theme background
+    background-clip: padding-box;
+    border: 1px solid rgba(0,0,0,.2);
+    border-radius: .3rem;
+    outline: 0;
+    color: #333; // Adjust for theme
+
+    // Dark theme adjustments (example, use actual theme variables)
+    // .theme-dark & {
+    //   background-color: #2a2f3b; // Example dark background
+    //   color: #d1d1d1;
+    //   border-color: #404858;
+    //   .form-control {
+    //      background-color: #1c1f26;
+    //      color: #d1d1d1;
+    //      border-color: #404858;
+    //   }
+    //   .close {
+    //      color: #fff;
+    //      text-shadow: none;
+    //   }
+    // }
+  }
+
+
+  .modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 1rem 1rem;
+    border-bottom: 1px solid #dee2e6; // Or theme border
+    border-top-left-radius: .3rem;
+    border-top-right-radius: .3rem;
+    .modal-title {
+      margin-bottom: 0;
+      line-height: 1.5;
+    }
+    .close {
+      padding: 1rem 1rem;
+      margin: -1rem -1rem -1rem auto;
+      background-color: transparent;
+      border: 0;
+      font-size: 1.5rem;
+      font-weight: 700;
+      line-height: 1;
+      color: #000; // Adjust for theme
+      text-shadow: 0 1px 0 #fff; // Adjust for theme
+      opacity: .5;
+      &:hover {
+        opacity: .75;
+      }
+    }
+  }
+  .modal-body {
+    position: relative;
+    flex: 1 1 auto;
+    padding: 1rem;
+    p {
+        margin-bottom: 0.5rem;
+    }
+    .form-group {
+        margin-bottom: 1rem;
+    }
+    .input-group {
+        margin-bottom: 0.25rem; // Space before small text
+    }
+    small {
+        display: block; // Ensure it takes its own line
+        margin-top: 0.25rem;
+    }
+  }
+}

@@ -46,6 +46,16 @@ type Order struct {
 	JSON            string          `json:"json" db:"json"`
 	CreatedAt       time.Time       `json:"createdAt" db:"created_at"`
 	UpdatedAt       time.Time       `json:"updatedAt" db:"updated_at"`
+
+	// Fields for Margin Trading
+	IsMargin              bool            `json:"isMargin" db:"is_margin"`
+	Leverage              decimal.Decimal `json:"leverage" db:"leverage"` // Store as decimal for precision
+	CollateralAmount      decimal.Decimal `json:"collateralAmount" db:"collateral_amount"`
+	CollateralAssetSymbol string          `json:"collateralAssetSymbol" db:"collateral_asset_symbol"`
+	BorrowedAmount        decimal.Decimal `json:"borrowedAmount" db:"borrowed_amount"`
+	BorrowedAssetSymbol   string          `json:"borrowedAssetSymbol" db:"borrowed_asset_symbol"`
+	InitialLoanID         string          `json:"initialLoanId" db:"initial_loan_id"` // If loans have distinct IDs from a loan management system
+	InitialLiquidationPrice decimal.Decimal `json:"initialLiquidationPrice" db:"initial_liquidation_price"`
 }
 
 func (o *Order) AutoSetStatusByAmounts() {
