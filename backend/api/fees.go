@@ -94,6 +94,12 @@ func getGasFeeAmount(market *models.Market) decimal.Decimal {
 	return humanFriendlyGasCostInQuoteToken
 }
 
+// calculateFee calculates fees for spot trades.
+// For margin trades, this will need to be adapted or a new function created.
+// Considerations for margin trade fees:
+// - Borrow Interest Rates: Fetch current borrow interest rates (via a conceptual MarginService).
+// - Funding Costs: Display estimated funding costs alongside regular trading fees.
+// - Gas Fee Amount: The GasFeeAmount might also change if a batch transaction for margin orders is more complex.
 func calculateFee(price, amount decimal.Decimal, market *models.Market, address string) *feeDetail {
 	detail := &feeDetail{}
 

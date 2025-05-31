@@ -28,6 +28,8 @@ const mapStateToProps = state => {
     initialValues: {
       side: 'buy',
       orderType: 'limit',
+      tradeMode: 'spot', // Add tradeMode to initialValues
+      leverage: 1, // Add leverage to initialValues
       subtotal: new BigNumber(0),
       total: new BigNumber(0),
       totalBase: new BigNumber(0),
@@ -63,7 +65,9 @@ const mapStateToProps = state => {
     side: selector(state, 'side'),
     orderType: selector(state, 'orderType'),
     bestBidPrice: bids.size > 0 ? bids.get(0)[0].toString() : null,
-    bestAskPrice: asks.size > 0 ? asks.get(asks.size - 1)[0].toString() : null
+    bestAskPrice: asks.size > 0 ? asks.get(asks.size - 1)[0].toString() : null,
+    tradeMode: selector(state, 'tradeMode'), // Extract tradeMode from form state
+    leverage: selector(state, 'leverage') // Extract leverage from form state
   };
 };
 
@@ -89,7 +93,7 @@ class Trade extends React.PureComponent {
   }
 
   render() {
-    const { side, handleSubmit, currentMarket, total, gasFee, tradeFee, subtotal, change } = this.props;
+    const { side, handleSubmit, currentMarket, total, gasFee, tradeFee, subtotal, change, tradeMode, leverage } = this.props; // Add tradeMode and leverage to props
     if (!currentMarket) {
       return null;
     }
@@ -119,11 +123,41 @@ class Trade extends React.PureComponent {
               </div>
             </li>
           </ul>
+          {/* Add Trade Mode Toggle */}
+          <ul className="nav nav-tabs">
+            <li className="nav-item flex-1 flex">
+              <div
+                className={`flex-1 tab-button text-secondary text-center${tradeMode === 'spot' ? ' active' : ''}`}
+                onClick={() => {
+                  change('tradeMode', 'spot');
+                  change('leverage', 1); // Reset leverage to 1x for spot mode
+                }}>
+                Spot
+              </div>
+            </li>
+            <li className="nav-item flex-1 flex">
+              <div
+                className={`flex-1 tab-button text-secondary text-center${tradeMode === 'margin' ? ' active' : ''}`}
+                onClick={() => change('tradeMode', 'margin')}>
+                Margin
+              </div>
+            </li>
+          </ul>
           <div className="flex flex-1 position-relative overflow-hidden" ref={ref => this.setRef(ref)}>
             <form
               className="form flex-column text-secondary flex-1 justify-content-between"
               onSubmit={handleSubmit(() => this.submit())}>
               <div>
+                {/* Add Leverage Selector */}
+                {tradeMode === 'margin' && (
+                  <Field
+                    name="leverage"
+                    component={this.renderLeverageSelector}
+                    label="Leverage"
+                    change={change}
+                    leverage={leverage}
+                  />
+                )}
                 <Field
                   name="price"
                   unit={currentMarket.quoteToken}
@@ -149,10 +183,37 @@ class Trade extends React.PureComponent {
                       <div className="name">Fees</div>
                       <div className="name">{gasFee.plus(tradeFee).toFixed(currentMarket.priceDecimals)}</div>
                     </div>
-                    <div className="item flex justify-content-between">
-                      <div className="name">Total</div>
-                      <div className="name">{total.toFixed(currentMarket.priceDecimals)}</div>
-                    </div>
+                    {tradeMode === 'spot' && (
+                      <div className="item flex justify-content-between">
+                        <div className="name">Total</div>
+                        <div className="name">{total.toFixed(currentMarket.priceDecimals)}</div>
+                      </div>
+                    )}
+                    {/* Update Order Summary for Margin Mode */}
+                    {tradeMode === 'margin' && (
+                      <>
+                        <div className="item flex justify-content-between">
+                          <div className="name">Leverage</div>
+                          <div className="name">{leverage}x</div>
+                        </div>
+                        <div className="item flex justify-content-between">
+                          <div className="name">Collateral Required</div>
+                          <div className="name"> {/* Placeholder */} </div>
+                        </div>
+                        <div className="item flex justify-content-between">
+                          <div className="name">Borrowed Amount</div>
+                          <div className="name"> {/* Placeholder */} </div>
+                        </div>
+                        <div className="item flex justify-content-between">
+                          <div className="name">Est. Liquidation Price</div>
+                          <div className="name"> {/* Placeholder */} </div>
+                        </div>
+                        <div className="item flex justify-content-between">
+                          <div className="name">Total Value</div>
+                          <div className="name">{total.toFixed(currentMarket.priceDecimals)}</div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -181,8 +242,33 @@ class Trade extends React.PureComponent {
     );
   };
 
+  // Add renderLeverageSelector method
+  renderLeverageSelector = ({ input, label, change, leverage }) => {
+    const leverageOptions = [1, 2, 5, 10]; // Define leverage options
+    return (
+      <div className="form-group">
+        <label>{label}</label>
+        <div className="input-group">
+          <select
+            className="form-control"
+            {...input}
+            value={leverage}
+            onChange={e => {
+              change('leverage', parseInt(e.target.value, 10));
+            }}>
+            {leverageOptions.map(option => (
+              <option key={option} value={option}>
+                {option}x
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    );
+  };
+
   async submit() {
-    const { amount, price, side, orderType, dispatch, isLoggedIn, address } = this.props;
+    const { amount, price, side, orderType, dispatch, isLoggedIn, address, tradeMode, leverage } = this.props; // Add tradeMode and leverage to props
     if (!isLoggedIn) {
       await dispatch(loginRequest(address));
       // Metamask's window will be hidden when continuous call Metamask sign method
