@@ -8,6 +8,13 @@ we have prepared serveral docker-compose files for different networks, the docke
 - ropsten - eth ropsten network
 - mainnet - eth mainnet network
 
+Additionally, support for Polygon and Arbitrum has been added:
+
+- `polygon-mainnet` - Polygon Mainnet
+- `polygon-mumbai` - Polygon Mumbai Testnet
+- `arbitrum-mainnet` - Arbitrum One Mainnet
+- `arbitrum-goerli` - Arbitrum Goerli Testnet
+
 If file name has suffix: `-source`, the docker images are built from local source code, otherwise, they are pulled from [https://hub.docker.com/u/hydroprotocolio](https://hub.docker.com/u/hydroprotocolio).
 
 The docker-compose files we provide are:
@@ -18,6 +25,14 @@ The docker-compose files we provide are:
 - docker-compose-ropsten-source.yaml
 - docker-compose-mainnet.yaml
 - docker-compose-mainnet-source.yaml
+- docker-compose-polygon-mainnet.yaml
+- docker-compose-polygon-mainnet-source.yaml
+- docker-compose-polygon-mumbai.yaml
+- docker-compose-polygon-mumbai-source.yaml
+- docker-compose-arbitrum-mainnet.yaml
+- docker-compose-arbitrum-mainnet-source.yaml
+- docker-compose-arbitrum-goerli.yaml
+- docker-compose-arbitrum-goerli-source.yaml
 
 ## Step 1: Cleanup
 
@@ -38,9 +53,11 @@ If the following command shows nothing docker containers existent, you are good 
 
 ## Step 2: Prepare Your Network
 
-**If you are deploying to the Ethereum Mainnet, Ropsten or localhost skip to Step 3** as these networks have already been prepared.
+**If you are deploying to the Ethereum Mainnet, Ropsten or localhost skip to Step 3** as these networks have already been prepared. For Polygon and Arbitrum networks (and their respective testnets like Mumbai and Arbitrum Goerli), this step is also crucial.
 
 To use this DEX on a custom network you must first deploy the required [Hydro Protocol v1.1 smart contracts](https://github.com/HydroProtocol/protocol/tree/v1.1). Ensure you are using the correct protocol branch, tagged **v1.1**, as other branches may be incompatible with the current DEX version. This can be done using the provided [deploy script](https://github.com/HydroProtocol/protocol/blob/v1.1/scripts/deploy.js) or following the steps below.
+
+**Important for Polygon and Arbitrum:** The `docker-compose-polygon-*.yaml` and `docker-compose-arbitrum-*.yaml` files come with **placeholder contract addresses** (e.g., `0xPOLYGON_MAINNET_HYDRO_PROXY_PLACEHOLDER`). You **MUST** replace these with the actual addresses of Hydro Protocol v1.1 smart contracts deployed on the target Polygon or Arbitrum network.
 
 1. Deploy `Proxy.sol`, `TestToken.sol` and `HybridExchange.sol` to your Network. You must pass the addresses of Proxy and TestToken to the HybridExchange's constructor.
 
@@ -82,12 +99,25 @@ docker-compose -f docker-compose-ropsten.yaml up
 
 # or run HydroScaffoldDex using local source code on ropsten
 docker-compose -f docker-compose-ropsten-source.yaml up
+
+# Run HydroScaffoldDex on Polygon Mainnet
+docker-compose -f docker-compose-polygon-mainnet.yaml up
+
+# Or run HydroScaffoldDex using local source code on Polygon Mumbai
+docker-compose -f docker-compose-polygon-mumbai-source.yaml up
+
+# Run HydroScaffoldDex on Arbitrum One Mainnet
+docker-compose -f docker-compose-arbitrum-mainnet.yaml up
+
+# Or run HydroScaffoldDex using local source code on Arbitrum Goerli Testnet
+docker-compose -f docker-compose-arbitrum-goerli-source.yaml up
 ```
 
 ## Step 5: Use
 
 Open `http://localhost:3000/` on your browser. 
+The frontend now includes a network selector (usually in the header). If you started the application using a specific network's Docker Compose file (e.g., for Polygon), the application will default to that network. You can use the selector to switch to other configured networks. Your connected wallet (e.g., MetaMask) will be prompted to switch to the selected network. Ensure your wallet is funded on the chosen network for transactions.
 
-For localhost, we have already prepared an address in the frontend wallet for you to trade. For the other environments, you need to setup an address by yourself.
+For localhost, we have already prepared an address in the frontend wallet for you to trade. For other networks (Ropsten, Mainnet, Polygon, Arbitrum, etc.), you need to setup an address by yourself in your wallet and ensure it's connected to the correct network.
 
 There are 3 markets available at first: `HOT-WETH`, `HOT-DAI` and `WETH-DAI`. You can add your own market by using the admin-api and admin-cli. Learn more about them [here](./admin-api-and-cli.md).

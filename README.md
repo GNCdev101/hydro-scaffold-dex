@@ -6,7 +6,7 @@
 
 # Overview
 
-This repository provides a basic scaffold for building a Decentralized Exchange (DEX) on the Ethereum blockchain. Follow the guides to learn how to:
+This repository provides a basic scaffold for building a Decentralized Exchange (DEX) on the Ethereum blockchain, and now also supports Polygon and Arbitrum networks. Follow the guides to learn how to:
 
 - Setup an open source, fully modifyable decentralized exchange on your local server
 - Send Ethereum transactions
@@ -41,6 +41,8 @@ If you don't already have them installed, you can follow [this link](https://doc
 
     This step may takes a few minutes.
     When complete, it will start all necessary services.
+
+    This command starts the DEX on a local Ethereum test node by default. To run on other networks like Ropsten, Polygon, or Arbitrum, you'll use specific `docker-compose` files. See `manual/change-network-and-run-from-source.md` for details.
 
     Note: It will use ports `3000`, `3001`, `3002`, `6379`, `8043`, and `8545` on your computer. Please make sure these ports are available.
 
@@ -167,7 +169,7 @@ You now have a fully functioning DEX on your local system, complete with a CLI f
 
 ## F&Q
 
-- [How to run on other network and run from source?](./manual/change-network-and-run-from-source.md)
+- [How to run on other network and run from source? (now including Polygon and Arbitrum!)](./manual/change-network-and-run-from-source.md)
 - [How to configure for external access?](./manual/config-nginx.md)
 
 ## How to setup environment for local development
