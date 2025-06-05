@@ -1,6 +1,8 @@
-import React from 'react';
+import React from 'react'; // useEffect was present but not used for class component
 import { connect } from 'react-redux';
 import { loadMarkets, loadTradeHistory } from './actions/markets';
+import { loadWeb3NetworkID } from './actions/config';
+import { networkConfigs } from './networks'; // Make sure this is imported
 import Header from './components/Header';
 import WebsocketConnector from './components/WebsocketConnector';
 import OrderBook from './components/Orderbook';
@@ -23,7 +25,9 @@ const mapStateToProps = state => {
   return {
     selectedAccountID,
     currentMarket: state.market.getIn(['markets', 'currentMarket']),
-    networkId: state.WalletReducer.getIn(['accounts', selectedAccountID, 'networkId'])
+    networkId: state.WalletReducer.getIn(['accounts', selectedAccountID, 'networkId']), // This is from the wallet's state
+    appNetworkId: state.config.get('web3NetworkID'), // This is from our app's config reducer
+    currentNetworkConfig: state.config.get('currentNetworkConfig'), // Get the full config object
   };
 };
 
@@ -38,13 +42,66 @@ class App extends React.PureComponent {
   componentDidMount() {
     const { dispatch, currentMarket } = this.props;
     dispatch(loadMarkets());
-    if (parseInt(env.NETWORK_ID) === 66) {
+    // Initial network ID sync logic is moved to useEffect below
+
+    if (parseInt(env.NETWORK_ID) === 66) { // env.NETWORK_ID is now from currentNetworkConfig
       this.initTestBrowserWallet();
     }
     if (currentMarket) {
       dispatch(loadTradeHistory(currentMarket.id));
     }
   }
+
+  // useEffect for initial network synchronization
+  // This replaces the direct componentDidMount logic for network ID
+  // We need to wrap App with connect to get dispatch in useEffect if we convert App to functional component
+  // For class components, we can call a method from componentDidMount.
+  // Let's add a new method for this.
+
+  initializeNetwork = async () => {
+    const { dispatch } = this.props;
+    const envNetworkId = env.initialNetworkId;
+
+    if (window.ethereum && window.ethereum.isMetaMask) {
+      try {
+        const walletChainIdHex = await window.ethereum.request({ method: 'eth_chainId' });
+        const walletNetworkId = String(parseInt(walletChainIdHex, 16));
+
+        if (networkConfigs[walletNetworkId]) { // Check if the wallet's network is one we support
+          if (walletNetworkId !== envNetworkId) {
+            console.log(`Wallet network (${walletNetworkId}) differs from environment (${envNetworkId}). Syncing to wallet's network.`);
+            dispatch(loadWeb3NetworkID(walletNetworkId));
+          } else {
+            // Wallet and env agree
+            dispatch(loadWeb3NetworkID(envNetworkId));
+          }
+        } else {
+          // Wallet's network is not in our supported list, stick to env default
+          console.log(`Wallet network ID ${walletNetworkId} not in supported list. Using environment default: ${envNetworkId}`);
+          dispatch(loadWeb3NetworkID(envNetworkId));
+        }
+      } catch (error) {
+        console.error("Error fetching wallet chainId, defaulting to environment config:", error);
+        dispatch(loadWeb3NetworkID(envNetworkId));
+      }
+    } else {
+      console.log("No MetaMask provider, defaulting to environment config network ID.");
+      dispatch(loadWeb3NetworkID(envNetworkId));
+    }
+  };
+
+  componentDidMount() {
+    const { dispatch, currentMarket } = this.props;
+    this.initializeNetwork(); // Call the network initialization logic
+    dispatch(loadMarkets());
+    if (parseInt(env.NETWORK_ID, 10) === 66) { // env.NETWORK_ID is now from currentNetworkConfig
+      this.initTestBrowserWallet();
+    }
+    if (currentMarket) {
+      dispatch(loadTradeHistory(currentMarket.id));
+    }
+  }
+
 
   componentDidUpdate(prevProps) {
     const { currentMarket, dispatch } = this.props;
@@ -72,9 +129,10 @@ class App extends React.PureComponent {
         <SDKWallet title="Starter Kit Wallet" nodeUrl={env.NODE_URL} defaultWalletType="Hydro-Wallet" />
         <WebsocketConnector />
         <Header />
-        {selectedAccountID === 'EXTENSION' && parseInt(networkId, 10) !== parseInt(env.NETWORK_ID, 10) && (
+        {/* Use appNetworkId from Redux state for checking against wallet's networkId */}
+        {selectedAccountID === 'EXTENSION' && this.props.networkId && this.props.appNetworkId && parseInt(this.props.networkId, 10) !== parseInt(this.props.appNetworkId, 10) && (
           <span className="network-warning bg-warning text-white text-center" style={{ padding: 4 }}>
-            Network Error: Switch Metamask's network to {this.getNetworkName()}.
+            Network Error: Switch Metamask's network to {this.getNetworkName()}. Your wallet is on network ID {this.props.networkId}.
           </span>
         )}
         <MediaQuery minWidth={1366}>{this.renderDesktop()}</MediaQuery>
@@ -99,18 +157,15 @@ class App extends React.PureComponent {
   }
 
   getNetworkName() {
-    switch (parseInt(env.NETWORK_ID, 10)) {
-      case 1:
-        return 'Mainnet';
-      case 3:
-        return 'Ropsten';
-      case 4:
-        return 'Rinkeby';
-      case 66:
-        return 'localhost:8545';
-      default:
-        return 'id: ' + env.NETWORK_ID;
+    // this.props.appNetworkId is the chainId of the network the app is configured for.
+    // this.props.currentNetworkConfig holds the full configuration for that network.
+    if (this.props.currentNetworkConfig && this.props.currentNetworkConfig.chainName) {
+      return this.props.currentNetworkConfig.chainName;
     }
+    // Fallback if currentNetworkConfig is somehow not populated yet
+    // env.NETWORK_ID here refers to the one from the import 'env.js', which is the initial one.
+    const fallbackConfig = networkConfigs[env.NETWORK_ID] || networkConfigs[defaultNetworkId];
+    return fallbackConfig.chainName || ('ID: ' + env.NETWORK_ID);
   }
 
   renderMobile() {
